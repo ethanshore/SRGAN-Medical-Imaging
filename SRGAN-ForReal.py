@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import os
 from time import time
 from tensorflow.keras.optimizers import Adam
+from keras.preprocessing.image import load_img, img_to_array
 
 # from skimage.metrics import structural_similarity, peak_signal_noise_ratio
 from skimage.measure import compare_ssim as structural_similarity
@@ -22,7 +23,6 @@ from sklearn.model_selection import train_test_split
 import pandas as pd
 import random
 import seaborn as sns
-import matplotlib.image as mpimg
 from PIL import Image
 import cv2
 import sys
@@ -308,7 +308,7 @@ def train(train_data, test_data, batch_size, start_epoch, n_epochs, factor):
 
         print('Epoch {} time: {:.2f}'.format(epoch+1, time()-start))
         
-        losses_per_epoch /= n*batch_size
+        losses_per_epoch /= n
         
         if epoch == start_epoch:
             losses = np.asarray([losses_per_epoch])
@@ -324,10 +324,11 @@ def train(train_data, test_data, batch_size, start_epoch, n_epochs, factor):
         if (epoch + 1) % 10 == 0:
             # validation metrics
             PSNR, SSIM = 0, 0
-            for test_img in test_data:
-                sr_img = gen(test_img, training = False)
-                SSIM += structural_similarity(test_img, sr_img, multichannel=False)
-                PSNR += peak_signal_noise_ratio(test_img, sr_img)
+            for hr_test_img in test_data:
+                lr_test_img = downSampleAll([hr_test_img], factor)
+                sr_img = gen(lr_test_img, training = False)
+                SSIM += structural_similarity(hr_test_img, sr_img, multichannel=False)
+                PSNR += peak_signal_noise_ratio(hr_test_img, sr_img)
             SSIM /= len(test_data)
             PSNR /= len(test_data)
             
@@ -352,39 +353,44 @@ def loadImages(directory, img_shape, limit = 1200):
     images = []
     for filename in os.listdir(directory)[0:limit]:
         if filename.endswith('.jpg'): # and i < 10 for testing
-            image = mpimg.imread(os.path.join(directory,filename))
-            image = cv2.resize(image, (img_shape[0], img_shape[1]))
-            image = (image - 127.5)/127.5 
+            image = load_img(os.path.join(directory,filename), target_size = img_shape)
+            image = img_to_array(image)
+            # image = plt.imread(os.path.join(directory,filename))
+            # image = cv2.resize(image, (img_shape[0], img_shape[1]))
+            # image = (image - 127.5)/127.5 
             images.append(image)
+
+    images = (np.asarray(images) / 127.5) - 1
+
     return images
 
 
 # In[75]:
 factor = 4
 
-image_shape = (128,128,3)
-hr_image_shape = (image_shape[0]*factor, image_shape[1]*factor, 3)
+lr_image_shape = (128,128,3)
+hr_image_shape = (lr_image_shape[0]*factor, lr_image_shape[1]*factor, 3)
 
-data = loadImages('celeba', img_shape = hr_image_shape, limit = 1200)
+hr_data = loadImages('celeba', img_shape = hr_image_shape, limit = 1200)
 
-sample_image = random.choice(data)
+sample_image = random.choice(hr_data)
 plt.imsave('sample_img.png', sample_image * 0.5 + 0.5)
 
 downsampled_img_sample = downSampleAll([sample_image], factor)[0]  * 0.5 + 0.5
 plt.imsave('downsampled_sample_img.png', downsampled_img_sample)
 
-train_data, test_data = train_test_split(data, test_size = 200, train_size = 1000)
+hr_train_data, hr_test_data = train_test_split(hr_data, test_size = 200, train_size = 1000, random_state = 10)
 
-print(np.asarray(train_data).shape)
+del hr_data
 
 bufferSize = 1000
-batch_size = 1
+batch_size = 8
 print('Converting to tf dataset')
-train_data = tf.data.Dataset.from_tensor_slices(np.asarray(train_data)).shuffle(bufferSize).batch(batch_size)
+hr_train_data = tf.data.Dataset.from_tensor_slices(np.asarray(hr_train_data)).shuffle(bufferSize).batch(batch_size)
 
 print('Building models')
-gen = generator(image_shape, 16)
-disc = discriminator((image_shape[0]*factor, image_shape[1]*factor, 3))
+gen = generator(lr_image_shape, 16)
+disc = discriminator((lr_image_shape[0]*factor, lr_image_shape[1]*factor, 3))
 
 gen_optimizer = Adam(lr = 0.0001, beta_1=0.9)
 disc_optimizer = Adam(lr = 0.0001, beta_1=0.9)
@@ -397,7 +403,7 @@ feat_ext = feature_extractor(i, j)
 start_epoch = 0
 n_epochs = 100
 
-train(train_data, test_data, batch_size, start_epoch, n_epochs, factor)
+train(hr_train_data, hr_test_data, batch_size, start_epoch, n_epochs, factor)
 
 
 # In[ ]:

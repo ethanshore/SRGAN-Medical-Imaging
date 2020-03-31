@@ -1,12 +1,7 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[4]:
-
-
 import tensorflow as tf
 from tensorflow.keras.layers import LeakyReLU, Conv2DTranspose, Conv2D, ReLU, PReLU, Add, Concatenate, Activation, BatchNormalization, Dense, Flatten
 from tensorflow.keras import Model, Input
+from tensorflow.keras.models import load_model
 import numpy as np
 import matplotlib.pyplot as plt
 import os
@@ -14,11 +9,9 @@ from time import time
 from tensorflow.keras.optimizers import Adam
 from keras.preprocessing.image import load_img, img_to_array
 
-# from skimage.metrics import structural_similarity, peak_signal_noise_ratio
 from skimage.measure import compare_ssim as structural_similarity
 from skimage.measure import compare_psnr as peak_signal_noise_ratio
 from sklearn.model_selection import train_test_split
-
 
 import pandas as pd
 import random
@@ -26,9 +19,6 @@ import seaborn as sns
 from PIL import Image
 import cv2
 import sys
-
-
-# In[55]:
 
 
 def discriminator(image_shape):
@@ -76,14 +66,12 @@ def discriminator(image_shape):
     d = LeakyReLU(0.2)(d)
     
     d = Flatten()(d)
-    # d = Dense(1024)(d)
-    # d = LeakyReLU(0.2)(d)
-
     d_out = Dense(1, activation = 'sigmoid')(d)
     
     disc = Model(input_img, d_out)
 
     return disc
+
 
 def resnet_block(n_filters, input_layer):
     # k3n64s1
@@ -129,7 +117,6 @@ def generator(image_shape, n_resnets):
     output_image = Activation("tanh")(g)
 
     generator = Model(input_image, output_image)
-    print(generator.output_shape)
     
     return generator
 
@@ -143,8 +130,6 @@ def feature_extractor(i, j):
             break
     model = Model(vgg.input, features_list[k])
 
-    print('Model size:', sys.getsizeof(model))
-    print('vgg size:', sys.getsizeof(vgg))
     del vgg
 
     return model
@@ -157,9 +142,7 @@ def discriminator_loss(real_output, fake_output):
     real_loss = entropy_loss(tf.ones_like(real_output), real_output)
     fake_loss = entropy_loss(tf.zeros_like(fake_output), fake_output)
 
-    total_loss = real_loss + fake_loss
-
-    return total_loss
+    return real_loss, fake_loss
 
 def generator_loss(fake_output):
     loss = entropy_loss(tf.ones_like(fake_output), fake_output)
@@ -175,11 +158,11 @@ def content_loss(hr_images, sr_images):
     return content_loss / 12.75
 
 
-# In[56]:
-
-
-def progress_update(model, input_img, epoch):
-    lr_input_img = downSampleAll([input_img], 4)
+def progress_update(model, input_img, epoch, factor):
+    '''
+    Show downsampled image, superresolution image, and ground truth HR image
+    '''
+    lr_input_img = downSampleAll([input_img], factor)
     prediction = model(lr_input_img, training = False)
 
     display_list = [lr_input_img[0], prediction[0], input_img]
@@ -190,7 +173,7 @@ def progress_update(model, input_img, epoch):
     for i in range(len(display_list)):
         plt.subplot(1, len(display_list), i+1)
         plt.title(titles[i])
-        plt.imshow(display_list[i] * 0.5 + 0.5) # scale images back from [-1,1] range to [0,1] for plotting
+        plt.imshow(display_list[i] * 0.5 + 0.5)
         plt.axis('off')
 
     plt.tight_layout()
@@ -201,6 +184,9 @@ def progress_update(model, input_img, epoch):
     plt.close()
     
 def show_loss_history(losses, names, title):
+    '''
+    Show loss history during adversarial training
+    '''
     epoch_idx = range(1, len(losses)+1)
     plt.figure(figsize=(15,12))
     sns.set()
@@ -216,11 +202,10 @@ def show_loss_history(losses, names, title):
     plt.close()
 
 
-# In[61]:
-
-
-def train_step(lr_images, hr_images):
-#     with tf.GradientTape() as gen_adv_tape, tf.GradientTape() as gen_content_tape, tf.GradientTape() as disc_tape:
+def train_step_adversarial(lr_images, hr_images):
+    '''
+    Perform one step of training (i.e. train on a single batch)
+    '''
     with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
 
         sr_images = gen(lr_images, training = True)
@@ -228,31 +213,22 @@ def train_step(lr_images, hr_images):
         real_output = disc(hr_images, training = True)
         fake_output = disc(sr_images, training = True)
         
-        disc_loss = discriminator_loss(real_output, fake_output)
-        
+        disc_loss_real, disc_loss_fake = discriminator_loss(real_output, fake_output)
+        disc_loss = disc_loss_real + disc_loss_fake
+
         gen_adv_loss = generator_loss(fake_output)
         gen_content_loss = content_loss(hr_images, sr_images)
-        gen_total_loss = gen_adv_loss + gen_content_loss
+        gen_total_loss = 0.001 * gen_adv_loss + gen_content_loss
 
     # Calculate gradients
-    # gen_adv_gradients = gen_adv_tape.gradient(gen_adv_loss, gen.trainable_variables)
-    # gen_content_gradients = gen_content_tape.gradient(gen_content_loss, gen.trainable_variables)
-    
     gen_gradients = gen_tape.gradient(gen_total_loss, gen.trainable_variables)
-    
     disc_gradients = disc_tape.gradient(disc_loss, disc.trainable_variables)
     
     # Apply gradients
-    # gen_optimizer.apply_gradients(zip(gen_adv_gradients, gen.trainable_variables))
-    # gen_optimizer.apply_gradients(zip(gen_content_gradients, gen.trainable_variables))
-    
     gen_optimizer.apply_gradients(zip(gen_gradients, gen.trainable_variables))
     disc_optimizer.apply_gradients(zip(disc_gradients, disc.trainable_variables))
     
-    return gen_adv_loss, gen_content_loss, disc_loss
-
-
-# In[77]:
+    return gen_adv_loss, gen_content_loss, disc_loss_real, disc_loss_fake
 
 
 def downSample(original_image, factor):
@@ -261,33 +237,26 @@ def downSample(original_image, factor):
     width = int(original_image.shape[1] / factor)
     height = int(original_image.shape[0] / factor)
     dim = (width, height)
-    downsampled_img = cv2.resize(original_image, dim) #, interpolation = cv2.INTER_AREA)
-
-    # print('DwnSmplImg size:', sys.getsizeof(downsampled_img))
+    downsampled_img = cv2.resize(original_image, dim)
 
     return downsampled_img
 
-
 def downSampleAll(images, factor):
-
-    # downsampled = [images[0]] * len(images)
     downsampled = []
-
     for i in range(len(images)):
         downsampled.append(downSample(images[i], factor))
-        # downsampled[i] = downSample(images[i], factor)
-
-    # print(np.asarray(downsampled).shape)
 
     return np.asarray(downsampled)
 
 
-# In[78]:
+def train_adversarial(train_data, val_data, batch_size, start_epoch, n_epochs, factor):
+    '''
+    Train generator and discriminator for n_epochs
+    '''
+    # Set aside sample image to track progress
+    sample_image = random.choice(val_data)
 
-
-def train(train_data, test_data, batch_size, start_epoch, n_epochs, factor):
-    sample_image = random.choice(test_data)
-    # create models directory if doesn't exist
+    # create models directory if doesn't exist (to save models here)
     dirName = 'models'
     if not os.path.exists(dirName):
         os.mkdir(dirName)
@@ -295,17 +264,19 @@ def train(train_data, test_data, batch_size, start_epoch, n_epochs, factor):
     else:    
         print("Directory " , dirName ,  " already exists")
     
+    # create valdiation history dataframe
     validation_hist = pd.DataFrame(columns = ['epoch', 'SSIM', 'PSNR'])
     
+    # Train for n_epochs
     for epoch in range(start_epoch, n_epochs):
-        losses_per_epoch = np.zeros(3)
+        losses_per_epoch = np.zeros(4)
         start = time()
         print('Starting epoch {}'.format(epoch+1))
         
         n = 0
         for hr_images in train_data:
             lr_images = downSampleAll(hr_images.numpy(), factor)
-            losses_per_epoch += train_step(lr_images, hr_images)
+            losses_per_epoch += train_step_adversarial(lr_images, hr_images)
             n += 1
         
 
@@ -317,16 +288,18 @@ def train(train_data, test_data, batch_size, start_epoch, n_epochs, factor):
         else:
             losses = np.vstack([losses, losses_per_epoch])
 
-        show_loss_history(losses, ["gen_adv","gen_content", "disc"], title = 'Training History')    
-            
-        if (epoch + 1) % 5 == 0:
-            progress_update(gen, sample_image, epoch)
+        # update loss history plot
+        show_loss_history(losses, ["gen_adv","gen_content", "disc_real", "disc_fake"], title = 'Training History')    
         
-        # save models every 10 epochs
+        # Show progress update with sample image every 5 epochs
+        if (epoch + 1) % 5 == 0:
+            progress_update(gen, sample_image, epoch, factor)
+        
+        # Save models every 10 epochs and compute validation scores
         if (epoch + 1) % 10 == 0:
             # validation metrics
             PSNR, SSIM = 0, 0
-            for hr_test_img in test_data:
+            for hr_test_img in val_data:
                 lr_test_img = downSampleAll([hr_test_img], factor)
                 sr_img = gen(lr_test_img, training = False)
 
@@ -334,25 +307,42 @@ def train(train_data, test_data, batch_size, start_epoch, n_epochs, factor):
 
                 SSIM += structural_similarity(hr_test_img, sr_img[0], multichannel=True)
                 PSNR += peak_signal_noise_ratio(hr_test_img, sr_img[0])
-            SSIM /= len(test_data)
-            PSNR /= len(test_data)
+            SSIM /= len(val_data)
+            PSNR /= len(val_data)
             
             #validation_hist = validation_hist.append({'epoch':epoch+1, 'SSIM':SSIM, 'PSNR':PSNR}, ignore_index=True)
             validation_hist = validation_hist.append({'epoch':epoch+1, 'SSIM':SSIM, 'PSNR':PSNR}, ignore_index=True)
             
-            # create directory for epoch
+            # Save models
             dirName = 'models/models_at_epoch{:04d}'.format(epoch+1)
             if not os.path.exists(dirName):
                 os.mkdir(dirName)
-                
-            gen.save(dirName + '/gen')
-            disc.save(dirName + '/disc')
+            # save generator
+            dirName = 'models/models_at_epoch{:04d}/gen'.format(epoch+1)
+            if not os.path.exists(dirName):
+                os.mkdir(dirName)
+            # Save JSON config to disk
+            json_config = gen.to_json()
+            with open(dirName + '/architecture.json', 'w') as json_file:
+                json_file.write(json_config)
+            # Save weights to disk
+            gen.save_weights(dirName + '/weights.h5')
+            print('Saved generator.')
+
+            # save descriminator
+            dirName = 'models/models_at_epoch{:04d}/disc'.format(epoch+1)
+            if not os.path.exists(dirName):
+                os.mkdir(dirName)
+            # Save JSON config to disk
+            json_config = disc.to_json()
+            with open(dirName + '/architecture.json', 'w') as json_file:
+                json_file.write(json_config)
+            # Save weights to disk
+            disc.save_weights(dirName + '/weights.h5')
+            print('Saved discriminator.')
     
-    #print(validation_hist)
-    validation_hist.to_csv('validation_history.csv')
-
-
-# In[1]:
+    # Write validation history to csv
+    validation_hist.to_csv('adv_validation_history.csv')
 
 
 def loadImages(directory, img_shape, limit = 1200):
@@ -367,55 +357,210 @@ def loadImages(directory, img_shape, limit = 1200):
             # image = (image - 127.5)/127.5 
             images.append(image)
 
-    images = (np.asarray(images) / 127.5) - 1
+    images = (np.asarray(images) / 127.5) - 1 # scale to [-1,1] range
 
     return images
 
-
-# In[75]:
 factor = 4
 
 lr_image_shape = (128,128,3)
 hr_image_shape = (lr_image_shape[0]*factor, lr_image_shape[1]*factor, 3)
 
-hr_data = loadImages('celeba', img_shape = hr_image_shape, limit = 1200)
+train_sz, val_sz, test_sz = 1000, 200, 200
 
-sample_image = random.choice(hr_data)
-plt.imsave('sample_img.png', sample_image * 0.5 + 0.5)
+hr_data = loadImages('celeba', img_shape = hr_image_shape, limit = train_sz+val_sz+test_sz)
 
-downsampled_img_sample = downSampleAll([sample_image], factor)[0]  * 0.5 + 0.5
-plt.imsave('downsampled_sample_img.png', downsampled_img_sample)
+hr_train_val_data, hr_test_data = train_test_split(hr_data, test_size = test_sz, train_size = train_sz+val_sz, random_state = 10)
 
-hr_train_data, hr_test_data = train_test_split(hr_data, test_size = 200, train_size = 1000, random_state = 10)
+hr_train_data, hr_val_data = train_test_split(hr_train_val_data, test_size = val_sz, train_size = train_sz, random_state = 10)
+
+# Make low res datasets for training, validation and testing
+lr_train_data = downSampleAll(hr_train_data, factor)
+lr_val_data = downSampleAll(hr_val_data, factor)
+lr_test_data = downSampleAll(hr_test_data, factor)
 
 del hr_data
+del  hr_train_val_data
+
+print('Building models')
+gen = generator(lr_image_shape, 16)
+gen_optimizer = Adam(lr = 0.0001, beta_1=0.9)
+
+def SSIM_score(y_true, y_pred):
+    return tf.image.ssim(y_true*0.5+0.5, y_pred*0.5+0.5, max_val=1.0)
+
+def PSNR_score(y_true, y_pred):
+    return tf.image.psnr(y_true*0.5+0.5, y_pred*0.5+0.5, max_val=1.0)
+
+gen.compile(loss = 'mean_squared_error', optimizer = gen_optimizer, metrics = [SSIM_score, PSNR_score])
+
+pretrain_batch_size = 1
+pretrain_epochs = 100
+pretrain_history = gen.fit(lr_train_data, hr_train_data, batch_size = pretrain_batch_size, epochs = pretrain_epochs, verbose = 2, validation_data = (lr_val_data, hr_val_data))
+
+# Make plots of training history and save them
+idx = range(1, pretrain_epochs+1)
+sns.set()
+# Plot training and validation loss and metrics
+plt.figure(figsize=(15,8))
+sns.lineplot(x = idx, y = pretrain_history.history['loss'], label = 'Training loss')
+sns.lineplot(x = idx, y = pretrain_history.history['val_loss'], label = 'Validation loss')
+plt.title('Model Loss History')
+plt.ylabel('Loss')
+plt.xlabel('Epoch')
+plt.legend(loc = 'best')
+plt.savefig('loss_history.png')
+plt.close()
+
+# Plot training and validation SSIM history
+plt.figure(figsize=(15,8))
+sns.lineplot(x = idx, y = pretrain_history.history['SSIM_score'], label = 'Training SSIM')
+sns.lineplot(x = idx, y = pretrain_history.history['val_SSIM_score'], label = 'Validation SSIM')
+plt.title('Model SSIM History')
+plt.ylabel('SSIM Score')
+plt.xlabel('Epoch')
+plt.legend(loc = 'best')
+plt.savefig('SSIM_history.png')
+plt.close()
+
+# Plot training and validation PSNR history
+plt.figure(figsize=(15,8))
+sns.lineplot(x = idx, y = pretrain_history.history['PSNR_score'], label = 'Training PSNR')
+sns.lineplot(x = idx, y = pretrain_history.history['val_PSNR_score'], label = 'Validation PSNR')
+plt.title('Model PSNR History')
+plt.ylabel('PSNR Score')
+plt.xlabel('Epoch')
+plt.legend(loc = 'best')
+plt.savefig('PSNR_history.png')
+plt.close()
+
+# Save 10 sample images
+if not os.path.exists('pretrain_test_samples'):
+    os.mkdir('pretrain_test_samples')
+
+for i in range(10):
+    hr_img = random.choice(hr_test_data)
+    lr_img = downSampleAll([hr_img], factor)
+    sr_img = gen(lr_img, training = False)
+
+    dir_name = 'test_samples/sample_{:03d}'.format(i)
+    if not os.path.exists(dir_name):
+        os.mkdir(dir_name)
+
+    plt.imsave(fname = dir_name + '/lr_img.png', arr = lr_img[0] * 0.5 + 0.5)
+    plt.imsave(fname = dir_name + '/sr_img.png', arr = sr_img[0] * 0.5 + 0.5)
+    plt.imsave(fname = dir_name + '/hr_img.png', arr = hr_img * 0.5 + 0.5)
+
+# Save model
+dirName = 'models'
+if not os.path.exists(dirName):
+    os.mkdir(dirName)
+dirName = 'models/gen_initial'
+if not os.path.exists(dirName):
+    os.mkdir(dirName)
+
+# Save JSON config to disk
+json_config = gen.to_json()
+with open(dirName + '/architecture.json', 'w') as json_file:
+    json_file.write(json_config)
+# Save weights to disk
+gen.save_weights(dirName + '/weights.h5')
+print('Saved pre-trained generator.')
+
+####### Begin adversial training for fine tuning #######
 
 bufferSize = 1000
 batch_size = 1
 print('Converting to tf dataset')
 hr_train_data = tf.data.Dataset.from_tensor_slices(np.asarray(hr_train_data)).shuffle(bufferSize).batch(batch_size)
 
-print('Building models')
-gen = generator(lr_image_shape, 16)
 disc = discriminator((lr_image_shape[0]*factor, lr_image_shape[1]*factor, 3))
-
-gen_optimizer = Adam(lr = 0.0001, beta_1=0.9)
 disc_optimizer = Adam(lr = 0.0001, beta_1=0.9)
 
 print('Started feature extractor.')
 i = 5
 j = 4
-feat_ext = feature_extractor(i, j) 
+feat_ext = feature_extractor(i, j)
 
 start_epoch = 0
-n_epochs = 100 #100
+n_epochs_adv = 50
 
-train(hr_train_data, hr_test_data, batch_size, start_epoch, n_epochs, factor)
+train_adversarial(hr_train_data, hr_val_data, batch_size, start_epoch, n_epochs_adv, factor)
 
-print("SRGAN COMPLETE!")
-
-# In[ ]:
+print("SRGAN TRAINING COMPLETE!")
 
 
+############# Testing ###############
 
+from sklearn.preprocessing import MinMaxScaler
+
+validation_hist = pd.read_csv('adv_validation_history.csv')
+
+def normalize_column(df, column_name):
+    data = df[column_name].to_numpy().reshape(-1, 1)
+    print(type(data))
+    scaler = MinMaxScaler()
+    scaled_data = scaler.fit_transform(data)
+    df[column_name] = scaled_data
+    
+    return df
+
+validation_hist = normalize_column(validation_hist, 'SSIM')
+validation_hist = normalize_column(validation_hist, 'PSNR')
+
+best_epoch_SSIM = validation_hist[validation_hist.SSIM == validation_hist.SSIM.max()]
+best_epoch_PSNR = validation_hist[validation_hist.PSNR == validation_hist.PSNR.max()]
+
+if best_epoch_PSNR.epoch.iloc[0] == best_epoch_SSIM.epoch.iloc[0]:
+    best_epoch  = best_epoch_SSIM.epoch.iloc[0]
+else:
+    combined_SSIM_epoch = best_epoch_SSIM['SSIM'] + best_epoch_SSIM['PSNR']
+    combined_PSNR_epoch = best_epoch_PSNR['SSIM'] + best_epoch_PSNR['PSNR']
+    if combined_SSIM_epoch.iloc[0] > combined_PSNR_epoch.iloc[0]:
+        best_epoch = best_epoch_SSIM.epoch.iloc[0]
+    else:
+        best_epoch = best_epoch_PSNR.epoch.iloc[0]
+best_epoch = int(best_epoch)
+
+# Load in best model
+model_path = 'models/models_at_epoch{:04d}'.format(best_epoch) + '/gen'
+with open(model_path + '/architecture.json') as json_file:
+    json_config = json_file.read()
+best_model = tf.keras.models.model_from_json(json_config)
+best_model.load_weights(model_path + '/weights.h5')
+print('Successfully loaded best model.')
+
+# Compute SSIM and PSNR on test dataset
+PSNR, SSIM = 0, 0
+for lr_img, hr_img in zip(lr_test_data, hr_test_data):
+    lr_img = np.expand_dims(lr_img, axis=0)
+    sr_img = best_model(lr_img, training = False)
+    sr_img = np.asarray(sr_img)
+
+    SSIM += structural_similarity(hr_img, sr_img[0], multichannel=True)
+    PSNR += peak_signal_noise_ratio(hr_img, sr_img[0])
+SSIM /= len(hr_test_data)
+PSNR /= len(hr_test_data)
+
+print('Test set SSIM: {:.2f}'.format(SSIM))
+print('Test set PSNR: {:.2f}'.format(PSNR))
+
+# Save 10 sample images
+if not os.path.exists('test_samples'):
+    os.mkdir('test_samples')
+
+for i in range(10):
+    hr_img = random.choice(hr_test_data)
+    lr_img = downSampleAll([hr_img], factor)
+    sr_img = best_model(lr_img, training = False)
+
+    dir_name = 'test_samples/sample_{:03d}'.format(i)
+    if not os.path.exists(dir_name):
+        os.mkdir(dir_name)
+
+    plt.imsave(fname = dir_name + '/lr_img.png', arr = lr_img[0] * 0.5 + 0.5)
+    plt.imsave(fname = dir_name + '/sr_img.png', arr = sr_img[0] * 0.5 + 0.5)
+    plt.imsave(fname = dir_name + '/hr_img.png', arr = hr_img * 0.5 + 0.5)
+
+print('DONE EVERYTHING!!!!!!!!!')
 
