@@ -1,29 +1,29 @@
 import tensorflow as tf
-from tensorflow.keras.layers import LeakyReLU, Conv2DTranspose, Conv2D, ReLU, PReLU, Add, Concatenate, Activation, BatchNormalization, Dense, Flatten
+from tensorflow.keras.layers import LeakyReLU, Conv2DTranspose, Conv2D, ReLU, PReLU, \
+                                    Add, Concatenate, Activation, BatchNormalization, Dense, Flatten
 from tensorflow.keras import Model, Input
-from tensorflow.keras.models import load_model
-import numpy as np
-import matplotlib.pyplot as plt
-import os
-from time import time
 from tensorflow.keras.optimizers import Adam
 from keras.preprocessing.image import load_img, img_to_array
-
+# from tensorflow.keras.models import load_model
 from skimage.measure import compare_ssim as structural_similarity
 from skimage.measure import compare_psnr as peak_signal_noise_ratio
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
 
+
+import numpy as np
 import pandas as pd
-import random
+import matplotlib.pyplot as plt
 import seaborn as sns
-from PIL import Image
+import os
+import random
 import cv2
-import sys
+from time import time
 
 
 def discriminator(image_shape):
     '''
-    Build a 70x70 PatchGAN discriminator
+    Build a CNN based discriminator model with input of size image_shape
     '''
     input_img = Input(shape = image_shape)
     # k3n64s1
@@ -74,22 +74,26 @@ def discriminator(image_shape):
 
 
 def resnet_block(n_filters, input_layer):
+    '''
+    Build a resnet block with n_filters per convolutional layer and attaches it to input_layer
+    '''
     # k3n64s1
-    g = Conv2DTranspose(n_filters, (3,3), strides=(1,1), padding='same')(input_layer)
+    g = Conv2D(n_filters, (3,3), strides=(1,1), padding='same')(input_layer)
     g = BatchNormalization()(g)
     g = PReLU()(g)
     # k3n64s1
-    g = Conv2DTranspose(n_filters, (3,3), strides=(1,1), padding='same')(g)
+    g = Conv2D(n_filters, (3,3), strides=(1,1), padding='same')(g)
     g = BatchNormalization()(g)
     
-    # g = Concatenate()([g, input_layer])
     g = Add()([g, input_layer])
     
     return g
 
 
 def generator(image_shape, n_resnets):
-
+    '''
+    Builds a CNN based generator network with n_resnets resnet blocks and input of size image_shape
+    '''
     input_image = Input(shape=image_shape)
     
     g = Conv2D(64, (3,3), strides=(1,1), padding='same')(input_image)
@@ -121,6 +125,9 @@ def generator(image_shape, n_resnets):
     return generator
 
 def feature_extractor(i, j):
+    '''
+    Feature extractor network used to perform content loss
+    '''
     vgg = tf.keras.applications.VGG19(include_top=False, weights='imagenet')
     vgg.trainable = False
     features_list = [layer.output for layer in vgg.layers]
@@ -149,7 +156,6 @@ def generator_loss(fake_output):
     return loss
         
 def content_loss(hr_images, sr_images):
-    
     hr_features = feat_ext(hr_images)
     sr_features = feat_ext(sr_images)
     
@@ -242,6 +248,9 @@ def downSample(original_image, factor):
     return downsampled_img
 
 def downSampleAll(images, factor):
+    '''
+    Downsample images by given factor
+    '''
     downsampled = []
     for i in range(len(images)):
         downsampled.append(downSample(images[i], factor))
@@ -251,7 +260,7 @@ def downSampleAll(images, factor):
 
 def train_adversarial(train_data, val_data, batch_size, start_epoch, n_epochs, factor):
     '''
-    Train generator and discriminator for n_epochs
+    Train generator and discriminator for n_epochs with batch_size
     '''
     # Set aside sample image to track progress
     sample_image = random.choice(val_data)
@@ -352,21 +361,20 @@ def loadImages(directory, img_shape, limit = 1200):
         if filename.endswith('.jpg'): # and i < 10 for testing
             image = load_img(os.path.join(directory,filename), target_size = img_shape)
             image = img_to_array(image)
-            # image = plt.imread(os.path.join(directory,filename))
-            # image = cv2.resize(image, (img_shape[0], img_shape[1]))
-            # image = (image - 127.5)/127.5 
             images.append(image)
 
     images = (np.asarray(images) / 127.5) - 1 # scale to [-1,1] range
 
     return images
 
-factor = 4
+############# Dataset preparation #############
 
-lr_image_shape = (128,128,3)
-hr_image_shape = (lr_image_shape[0]*factor, lr_image_shape[1]*factor, 3)
+factor = 4 # downsampling factor
 
-train_sz, val_sz, test_sz = 1000, 200, 200
+lr_image_shape = (128,128,3) # low resolution image shape
+hr_image_shape = (lr_image_shape[0]*factor, lr_image_shape[1]*factor, 3) # high resolution image shape
+
+train_sz, val_sz, test_sz = 1000, 200, 200 # training, validation and test set sizes
 
 hr_data = loadImages('celeba', img_shape = hr_image_shape, limit = train_sz+val_sz+test_sz)
 
@@ -382,8 +390,10 @@ lr_test_data = downSampleAll(hr_test_data, factor)
 del hr_data
 del  hr_train_val_data
 
+############# SR-ResNet Training #############
+
 print('Building models')
-gen = generator(lr_image_shape, 16)
+gen = generator(lr_image_shape, 16) # change number of resnet layers here
 gen_optimizer = Adam(lr = 0.0001, beta_1=0.9)
 
 def SSIM_score(y_true, y_pred):
@@ -394,8 +404,8 @@ def PSNR_score(y_true, y_pred):
 
 gen.compile(loss = 'mean_squared_error', optimizer = gen_optimizer, metrics = [SSIM_score, PSNR_score])
 
-pretrain_batch_size = 1
-pretrain_epochs = 100
+pretrain_batch_size = 1 # SR-ResNet training batch size
+pretrain_epochs = 100 # number of SR-ResNet training epochs
 pretrain_history = gen.fit(lr_train_data, hr_train_data, batch_size = pretrain_batch_size, epochs = pretrain_epochs, verbose = 2, validation_data = (lr_val_data, hr_val_data))
 
 # Make plots of training history and save them
@@ -467,7 +477,7 @@ with open(dirName + '/architecture.json', 'w') as json_file:
 gen.save_weights(dirName + '/weights.h5')
 print('Saved pre-trained generator.')
 
-####### Begin adversial training for fine tuning #######
+############# SRGAN training for fine tuning #############
 
 bufferSize = 1000
 batch_size = 1
@@ -483,16 +493,13 @@ j = 4
 feat_ext = feature_extractor(i, j)
 
 start_epoch = 0
-n_epochs_adv = 50
+n_epochs_adv = 50 # input number of adversarial training epochs
 
 train_adversarial(hr_train_data, hr_val_data, batch_size, start_epoch, n_epochs_adv, factor)
 
 print("SRGAN TRAINING COMPLETE!")
 
-
-############# Testing ###############
-
-from sklearn.preprocessing import MinMaxScaler
+############# Testing #############
 
 validation_hist = pd.read_csv('adv_validation_history.csv')
 
