@@ -376,7 +376,8 @@ hr_image_shape = (lr_image_shape[0]*factor, lr_image_shape[1]*factor, 3) # high 
 
 train_sz, val_sz, test_sz = 1000, 200, 200 # training, validation and test set sizes
 
-hr_data = loadImages('celeba', img_shape = hr_image_shape, limit = train_sz+val_sz+test_sz)
+dataset_directory = 'medical_images' # change directory to images here
+hr_data = loadImages(dataset_directory, img_shape = hr_image_shape, limit = train_sz+val_sz+test_sz) # change directory to images here
 
 hr_train_val_data, hr_test_data = train_test_split(hr_data, test_size = test_sz, train_size = train_sz+val_sz, random_state = 10)
 
