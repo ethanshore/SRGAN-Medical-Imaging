@@ -1,4 +1,4 @@
-# 351-project
+# CMPE 351 Final Project
 
 April 17th, 2020
 
