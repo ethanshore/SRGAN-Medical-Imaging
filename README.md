@@ -1,4 +1,4 @@
-# CMPE 351 Final Project
+# CMPE 351 Final Project - Group 3
 
 April 17th, 2020
 
