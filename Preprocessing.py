@@ -38,11 +38,11 @@ def filterImages(images):
             plt.imsave("medical_images/"+str(i)+".jpg", (images[i]+1)/2)
 
 
-def loadImages(directory, img_shape, limit = 5000):
+def loadImages(directory):
     images = []
-    for filename in os.listdir(directory)[0:limit]:
-        if filename.endswith('.jpg'): # and i < 10 for testing
-            image = load_img(os.path.join(directory,filename), target_size = img_shape)
+    for filename in os.listdir(directory):
+        if filename.endswith('.jpg'):
+            image = load_img(os.path.join(directory,filename))
             image = img_to_array(image)
             images.append(image)
 
@@ -51,7 +51,16 @@ def loadImages(directory, img_shape, limit = 5000):
     return images
 
 
-images = loadImages("Dataset", (512,512,3)) # change "Dataset" to the name of the folder containing the images
+images = loadImages("Dataset") # change "Dataset" to the name of the folder containing the images
 
-filterImages(images)
+target_image_shape = (512, 512, 3)
+
+images_512 = []
+
+# select images of the target size
+for image in images:
+    if image.shape == target_image_shape:
+        images_512.append(image)
+
+filterImages(images_512)
 
