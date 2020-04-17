@@ -2,11 +2,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import cv2
 from PIL import Image
-from skimage.metrics import structural_similarity, peak_signal_noise_ratio
+from skimage.measure import compare_ssim as structural_similarity
+from skimage.measure import compare_psnr as peak_signal_noise_ratio
 import os
 
 def interpolate_image(path, print_pics = False):
-	orig_img = plt.imread(path) #('/content/0004x2.png')
+	orig_img = plt.imread(path)
 	print('Original Dimensions : ', orig_img.shape)
 	orig_dim = (orig_img.shape[1], orig_img.shape[0]) # (width, height)
 
@@ -22,9 +23,6 @@ def interpolate_image(path, print_pics = False):
 	resized_NN = cv2.resize(downsampled_img, orig_dim, interpolation = cv2.INTER_NEAREST)
 	resized_BL = cv2.resize(downsampled_img, orig_dim, interpolation = cv2.INTER_LINEAR)
 	resized_BC = cv2.resize(downsampled_img, orig_dim, interpolation = cv2.INTER_CUBIC)
-	# print(np.max(resized_BC))
-	# print(np.min(resized_BC))
-	# resized_BC = np.clip(resized_BC, 0, 1)
 
 	print('Resized Dimensions : ', resized_NN.shape)
 	if print_pics:
@@ -60,16 +58,16 @@ def interpolate_image(path, print_pics = False):
 		plt.axis('off')
 
 		plt.tight_layout()
-		plt.savefig('interpolated_' + path[-10:-4])
+		plt.savefig('interpolated_' + path[:-4] + '.png')
 		plt.show()
 
-	NN_ssim = structural_similarity(orig_img, resized_NN, multichannel=False)
+	NN_ssim = structural_similarity(orig_img, resized_NN, multichannel=True)
 	NN_psnr = peak_signal_noise_ratio(orig_img, resized_NN)
 
-	BL_ssim = structural_similarity(orig_img, resized_BL, multichannel=False)
+	BL_ssim = structural_similarity(orig_img, resized_BL, multichannel=True)
 	BL_psnr = peak_signal_noise_ratio(orig_img, resized_BL)
 
-	BC_ssim = structural_similarity(orig_img, resized_BC, multichannel=False)
+	BC_ssim = structural_similarity(orig_img, resized_BC, multichannel=True)
 	BC_psnr = peak_signal_noise_ratio(orig_img, resized_BC)
 
 	return NN_ssim, NN_psnr, BL_ssim, BL_psnr, BC_ssim, BC_psnr
@@ -78,8 +76,7 @@ NN_ssim, NN_psnr = list(), list()
 BL_ssim, BL_psnr = list(), list()
 BC_ssim, BC_psnr = list(), list()
 
-
-directory = '/content/drive/My Drive/Cancer Images'
+directory = 'medical_images' # change path to images here
 for filename in os.listdir(directory):
 	if filename.endswith('.jpg'):
 		path = os.path.join(directory, filename)
@@ -104,25 +101,3 @@ print('\tPSNR: {:.2f}'.format(np.mean(BL_psnr)))
 print('Bicubic Interpolation:')
 print('\tSSIM: {:.2f}'.format(np.mean(BC_ssim)))
 print('\tPSNR: {:.2f}'.format(np.mean(BC_psnr)))
-
-# Compute errors scores
-NN_ssim = structural_similarity(orig_img, resized_NN, multichannel=True)
-NN_psnr = peak_signal_noise_ratio(orig_img, resized_NN)
-
-BL_ssim = structural_similarity(orig_img, resized_BL, multichannel=True)
-BL_psnr = peak_signal_noise_ratio(orig_img, resized_BL)
-
-BC_ssim = structural_similarity(orig_img, resized_BC, multichannel=True)
-BC_psnr = peak_signal_noise_ratio(orig_img, resized_BC)
-
-print('Nearest Neighbour Interpolation:')
-print('\tSSIM: {:.2f}'.format(NN_ssim))
-print('\tPSNR: {:.2f}'.format(NN_psnr))
-
-print('Bilinear Interpolation:')
-print('\tSSIM: {:.2f}'.format(BL_ssim))
-print('\tPSNR: {:.2f}'.format(BL_psnr))
-
-print('Bicubic Interpolation:')
-print('\tSSIM: {:.2f}'.format(BC_ssim))
-print('\tPSNR: {:.2f}'.format(BC_psnr))
